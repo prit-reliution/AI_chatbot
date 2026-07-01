@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<odoo>
-    <!-- Client Action: Registers OWL component as a backend action -->
-    <record id="action_chatbot_client" model="ir.actions.client">
-        <field name="name">AI Sales Order Chatbot</field>
-        <field name="tag">sale_order_ai_chatbot.chatbot_client_action</field>
-        <field name="target">main</field>
-    </record>
-</odoo>

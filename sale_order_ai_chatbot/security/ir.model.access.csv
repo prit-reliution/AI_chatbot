@@ -1,3 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_sale_chatbot_session_user,sale.chatbot.session user,model_sale_chatbot_session,base.group_user,1,1,1,1
-access_sale_chatbot_message_user,sale.chatbot.message user,model_sale_chatbot_message,base.group_user,1,1,1,1
