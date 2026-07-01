@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================
+         sale.chatbot.session — List View
+         ============================================================ -->
+    <record id="view_sale_chatbot_session_list" model="ir.ui.view">
+        <field name="name">sale.chatbot.session.list</field>
+        <field name="model">sale.chatbot.session</field>
+        <field name="arch" type="xml">
+            <tree string="Chat Sessions" decoration-success="state == 'done'"
+                  decoration-info="state == 'ready'" decoration-muted="state == 'draft'">
+                <field name="name"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'done'"
+                       decoration-info="state == 'ready'"
+                       decoration-warning="state == 'processing'"
+                       decoration-muted="state == 'draft'"/>
+                <field name="user_id"/>
+                <field name="message_count" string="Messages"/>
+                <field name="confidence_score" string="Confidence %"
+                       widget="progressbar"/>
+                <field name="sale_order_id" string="Sales Order"/>
+                <field name="create_date" string="Started"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- ============================================================
+         sale.chatbot.session — Form View
+         ============================================================ -->
+    <record id="view_sale_chatbot_session_form" model="ir.ui.view">
+        <field name="name">sale.chatbot.session.form</field>
+        <field name="model">sale.chatbot.session</field>
+        <field name="arch" type="xml">
+            <form string="Chat Session">
+                <header>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="draft,processing,ready,done"/>
+                    <button name="action_open_sale_order" string="View Sales Order"
+                            type="object" class="oe_highlight"
+                            invisible="not sale_order_id"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="user_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="confidence_score" widget="progressbar"/>
+                        </group>
+                        <group>
+                            <field name="sale_order_id"/>
+                            <field name="message_count" string="Total Messages"/>
+                            <field name="order_line_count" string="Extracted Lines"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Messages" name="messages">
+                            <field name="message_ids" nolabel="1">
+                                <tree>
+                                    <field name="role" widget="badge"/>
+                                    <field name="content" string="Message"/>
+                                    <field name="message_type"/>
+                                    <field name="create_date" string="Time"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Attachments" name="attachments">
+                            <field name="attachment_ids" widget="many2many_binary"
+                                   string="Uploaded Files"/>
+                        </page>
+                        <page string="Order Data (JSON)" name="order_data"
+                              groups="base.group_system">
+                            <field name="order_data"
+                                   invisible="order_data == '{}'"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============================================================
+         Action: Chat Session list
+         ============================================================ -->
+    <record id="action_chatbot_session_list" model="ir.actions.act_window">
+        <field name="name">Chat History</field>
+        <field name="res_model">sale.chatbot.session</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('user_id', '=', uid)]</field>
+        <field name="context">{'search_default_user_id': uid}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No chat sessions yet!
+            </p>
+            <p>
+                Start a new AI chat session to create Sales Orders using
+                natural language or document uploads.
+            </p>
+        </field>
+    </record>
+
+</odoo>

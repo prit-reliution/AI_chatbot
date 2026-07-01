@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- Gemini API Key (empty by default - user must configure) -->
+        <record id="param_gemini_api_key" model="ir.config_parameter">
+            <field name="key">sale_order_ai_chatbot.gemini_api_key</field>
+            <field name="value"></field>
+        </record>
+
+        <!-- Default Gemini Chat Model -->
+        <record id="param_gemini_model" model="ir.config_parameter">
+            <field name="key">sale_order_ai_chatbot.gemini_model</field>
+            <field name="value">gemini-2.5-flash</field>
+        </record>
+
+        <!-- Default Gemini Vision Model -->
+        <record id="param_gemini_vision_model" model="ir.config_parameter">
+            <field name="key">sale_order_ai_chatbot.gemini_vision_model</field>
+            <field name="value">gemini-2.5-flash</field>
+        </record>
+
+        <!-- Default Max Tokens -->
+        <record id="param_gemini_max_tokens" model="ir.config_parameter">
+            <field name="key">sale_order_ai_chatbot.gemini_max_tokens</field>
+            <field name="value">4096</field>
+        </record>
+
+        <!-- Session sequence -->
+        <record id="seq_sale_chatbot_session" model="ir.sequence">
+            <field name="name">AI Sales Chat Session</field>
+            <field name="code">sale.chatbot.session</field>
+            <field name="prefix">CHAT/%(year)s/</field>
+            <field name="padding">4</field>
+            <field name="company_id" eval="False"/>
+        </record>
+
+    </data>
+</odoo>
