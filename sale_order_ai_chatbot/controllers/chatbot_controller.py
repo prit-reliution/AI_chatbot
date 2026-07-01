@@ -616,6 +616,28 @@ class SaleOrderAIChatbotController(http.Controller):
             _logger.error('Error deleting session: %s', str(e))
             return {'success': False, 'error': str(e)}
 
+    @http.route(
+        f'{BASE_URL}/sessions/delete_bulk',
+        type='json',
+        auth='user',
+        methods=['POST'],
+        csrf=False,
+    )
+    def delete_sessions_bulk(self, session_ids, **kwargs):
+        """Delete multiple chatbot sessions at once."""
+        try:
+            if not isinstance(session_ids, list):
+                return {'success': False, 'error': 'Invalid session IDs format'}
+            sessions = request.env['sale.chatbot.session'].browse(session_ids).exists()
+            allowed_sessions = sessions.filtered(lambda s: s.user_id.id == request.env.user.id)
+            if not allowed_sessions:
+                return {'success': False, 'error': 'No matching sessions or permission denied'}
+            allowed_sessions.unlink()
+            return {'success': True}
+        except Exception as e:
+            _logger.error('Error deleting sessions: %s', str(e))
+            return {'success': False, 'error': str(e)}
+
     # -------------------------------------------------------------------------
     # Autocomplete
     # -------------------------------------------------------------------------

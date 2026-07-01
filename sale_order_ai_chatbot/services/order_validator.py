@@ -77,6 +77,45 @@ class OrderValidator:
                     
         return None
 
+    def resolve_alias_to_real_name(self, text, product_category=None):
+        """
+        If text matches an alias name exactly (case-insensitive/cleaned),
+        resolve it to the real name of the mapped product or partner.
+        Otherwise, returns text.
+        """
+        if not text or not isinstance(text, str) or not product_category:
+            return text
+            
+        # 1. Find the active category record
+        category = self.env['alias.category'].sudo().search([('type', '=', product_category)], limit=1)
+        if not category:
+            return text
+            
+        # 2. Search alias lines in this category
+        # Match alias_name exactly (case-insensitive)
+        alias_lines = category.line_ids.filtered(lambda l: (l.alias_name or '').strip().lower() == text.strip().lower())
+        
+        # If no exact match, try a cleaned comparison
+        if not alias_lines:
+            import re
+            def clean_text(val):
+                return re.sub(r'[\W_]+', '', val).lower() if val else ''
+            text_clean = clean_text(text)
+            if text_clean:
+                alias_lines = category.line_ids.filtered(lambda l: clean_text(l.alias_name) == text_clean)
+                
+        if not alias_lines:
+            return text
+            
+        # Return real name if mapped to a product or partner
+        for line in alias_lines:
+            if line.product_ids:
+                return line.product_ids[0].name
+            if line.partner_ids:
+                return line.partner_ids[0].name
+                
+        return text
+
     def validate_and_enrich(self, order_data, is_manual=False):
         """
         Validate and enrich order data. Supports both single order dict and multiple orders dict.
@@ -146,9 +185,16 @@ class OrderValidator:
         if lpo:
             enriched['lpo_number'] = str(lpo).replace('#', '').strip()
 
+        # Resolve customer name if it matches an alias exactly
+        customer_name_raw = (enriched.get('customer') or '').strip()
+        if customer_name_raw and customer_name_raw != 'UNRESOLVED':
+            customer_name_resolved = self.resolve_alias_to_real_name(customer_name_raw, product_category=product_category)
+            if customer_name_resolved != customer_name_raw:
+                enriched['customer'] = customer_name_resolved
+
         # --- Validate customer ---
-        customer_name = (order_data.get('customer') or '').strip()
-        customer_id = order_data.get('customer_id')
+        customer_name = (enriched.get('customer') or '').strip()
+        customer_id = enriched.get('customer_id')
 
         if is_manual:
             if customer_id:
@@ -198,10 +244,24 @@ class OrderValidator:
 
         enriched_lines = []
         for line in order_data.get('order_lines', []):
-            prod_name = (line.get('product') or '').strip()
+            original_prod_name = (line.get('product') or '').strip()
+            prod_name = original_prod_name
+            if prod_name and prod_name != 'UNRESOLVED':
+                prod_name = self.resolve_alias_to_real_name(prod_name, product_category=product_category)
+            
+            # Resolve aliases in other fields (width, height, qty, price) if they are strings matching an alias exactly
+            for field in ('width', 'height', 'qty', 'price'):
+                val = line.get(field)
+                if val and isinstance(val, str):
+                    val_str = val.strip()
+                    resolved_val = self.resolve_alias_to_real_name(val_str, product_category=product_category)
+                    if resolved_val != val_str:
+                        line[field] = resolved_val
+                        
             prod_id = line.get('product_id')
             enriched_line = dict(line)
-            enriched_line['_original_product'] = prod_name
+            enriched_line['product'] = prod_name
+            enriched_line['_original_product'] = original_prod_name
 
             product_rec = None
             if is_manual:

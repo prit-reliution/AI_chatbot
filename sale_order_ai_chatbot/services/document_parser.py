@@ -47,25 +47,52 @@ class DocumentParser:
         if mimetype_lower in self.IMAGE_MIMES or any(
             filename_lower.endswith(ext) for ext in ('.png', '.jpg', '.jpeg', '.webp')
         ):
-            return self.parse_image(file_bytes, mimetype_lower or 'image/jpeg')
+            text = self.parse_image(file_bytes, mimetype_lower or 'image/jpeg')
+        elif mimetype_lower == self.PDF_MIME or filename_lower.endswith('.pdf'):
+            text = self.parse_pdf(file_bytes)
+        elif mimetype_lower == self.DOCX_MIME or filename_lower.endswith('.docx'):
+            text = self.parse_docx(file_bytes)
+        elif mimetype_lower == self.XLS_MIME or filename_lower.endswith('.xls'):
+            text = self.parse_xls(file_bytes)
+        elif mimetype_lower == self.XLSX_MIME or filename_lower.endswith('.xlsx'):
+            text = self.parse_xlsx(file_bytes)
+        else:
+            # Fallback: treat as plain text
+            try:
+                text = file_bytes.decode('utf-8', errors='replace')
+            except Exception:
+                text = ''
 
-        if mimetype_lower == self.PDF_MIME or filename_lower.endswith('.pdf'):
-            return self.parse_pdf(file_bytes)
+        return self._clean_and_filter_text(text)
 
-        if mimetype_lower == self.DOCX_MIME or filename_lower.endswith('.docx'):
-            return self.parse_docx(file_bytes)
-
-        if mimetype_lower == self.XLS_MIME or filename_lower.endswith('.xls'):
-            return self.parse_xls(file_bytes)
-
-        if mimetype_lower == self.XLSX_MIME or filename_lower.endswith('.xlsx'):
-            return self.parse_xlsx(file_bytes)
-
-        # Fallback: treat as plain text
-        try:
-            return file_bytes.decode('utf-8', errors='replace')
-        except Exception:
+    def _clean_and_filter_text(self, text):
+        """
+        Clean up extracted text by:
+        1. Compressing multiple blank lines into a maximum of 2 newlines.
+        2. Compressing large gaps of spaces (3 or more) into exactly 2 spaces to preserve tabular alignment while saving tokens.
+        3. Stripping trailing spaces from each line while preserving leading indentation.
+        """
+        if not text:
             return ''
+        import re
+        
+        # Strip trailing whitespaces from each line and compress space gaps
+        lines = []
+        for line in text.split('\n'):
+            line_rstripped = line.rstrip()
+            if line_rstripped.strip():
+                # Compress 3 or more consecutive spaces preceded by a non-space char into exactly 2 spaces
+                line_cleaned = re.sub(r'(?<=\S) {3,}', '  ', line_rstripped)
+                lines.append(line_cleaned)
+            else:
+                lines.append('')
+        
+        cleaned_text = '\n'.join(lines)
+        
+        # Compress multiple blank lines (3 or more consecutive newlines) into a maximum of 2 newlines
+        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
+        
+        return cleaned_text.strip('\n')
 
     def _get_fitz(self):
         """Import PyMuPDF — supports both old (fitz) and new (pymupdf) import names."""

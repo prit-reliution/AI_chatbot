@@ -1198,7 +1198,7 @@
 
 .o_session_item_name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 300;
   color: var(--bot-text-primary);
   white-space: nowrap;
   overflow: hidden;

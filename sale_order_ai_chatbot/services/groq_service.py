@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-GeminiService — Wrapper around the Google Gemini REST API.
+GroqService — Wrapper around the Groq Python SDK.
 
 Handles:
 - Chat completions for order extraction
@@ -9,26 +9,25 @@ Handles:
 import json
 import logging
 import base64
-import re
-import requests
 
 _logger = logging.getLogger(__name__)
 
 
-class GeminiService:
+class GroqService:
     """
-    Wrapper for Gemini API calls using requests.
+    Wrapper for Groq API calls.
     Instantiated per-request with the current environment's config params.
     """
+             # 8.  .... or billing details block
     SYSTEM_PROMPT = """You are an expert AI Sales Order Assistant for an Odoo ERP system.
 Your role is to help users create Sales Orders through natural conversation.
 
 BEHAVIOR:
-- Act like a professional, friendly sales executive assistant.
-- Extract order information from user messages and uploaded documents.
-- Keep your conversational response extremely short, concise, and direct.
-- DO NOT list, summarize, or repeat the successfully extracted order details (such as customer name, product names, quantities, dimensions, dates) in your chat response, as the user can already see and edit them in the preview panel.
-- If there are any questions, missing required fields, or validation issues, ONLY ask or list those specific issues/questions in your chat response so the user can address them.
+- Act like a professional, friendly sales executive assistant
+- Extract order information from user messages and uploaded documents
+- Keep your conversational response extremely short, concise, and direct
+- DO NOT list, summarize, or repeat the successfully extracted order details (such as customer name, product names, quantities, dimensions, dates) in your chat response, as the user can already see and edit them in the preview panel
+- If there are any questions, missing required fields, or validation issues, ONLY ask or list those specific issues/questions in your chat response so the user can address them
 - If all required information is successfully extracted and resolved without errors or follow-up questions, simply respond with a short success message (e.g. "I have successfully extracted the order details. Please review them in the preview panel on the right.")
 
 CRITICAL RULES:
@@ -38,7 +37,7 @@ CRITICAL RULES:
 4. Never fabricate product names or customer names
 5. Ask for clarification rather than guessing critical information
 6. If the uploaded document or user message does not specify a tax or a discount for a product line (or if they are blank/empty in the document), you MUST set `tax` to null and `discount` to 0.0. Do not guess or assume any other values. Keep blank fields strictly as 0.0 or null.
-7. CUSTOMER NAME EXTRACTION RULE: The customer name is the issuer/buyer company name ordering the products. 'Tesro' is the main company (vendor/supplier), so try to find another customer name in the uploaded document. Also, 90% of the document's first row/line is the customer name. You MUST extract the customer name ONLY from the Header section (the top portion of the uploaded document), and NEVER from outside the Header section. The customer name is strictly located in the first 1 rows of the document header at 90% of the document. You must NOT look for or extract the customer name from any content below the first 3 rows of the document header or from blocks/lines labeled 'Shipping Address', 'Address', 'Shipping', 'Partner', or 'Supplier Name'. Under no circumstances should you extract the address details, street names, cities, countries, or TRN tax numbers as part of the customer name. The customer name is ALWAYS a company name or a person name (the buyer/issuer), NEVER a city, country, address, or location/area name. 
+7. CUSTOMER NAME EXTRACTION RULE: The customer name is the issuer/buyer company name ordering the products. 'Tesro' is the main company (vendor/supplier), so try to find another customer name in the uploaded document. Also, 90% of the document's first row/line is the customer name. You MUST extract the customer name ONLY from the Header section (the top portion of the uploaded document), and NEVER from outside the Header section. The customer name is strictly located in the first 1 rows of the document header. You must NOT look for or extract the customer name from any content below the first 3 rows of the document header or from blocks/lines labeled 'Shipping Address', 'Address', 'Shipping', 'Partner', or 'Supplier Name'. Under no circumstances should you extract the address details, street names, cities, countries, or TRN tax numbers as part of the customer name. The customer name is ALWAYS a company name or a person name (the buyer/issuer), NEVER a city, country, address, or location/area name. 
 8. For order lines: if the uploaded document has multiple lines of the same product, but they differ in width, height, or product name (even one of these is different), you MUST keep them as separate lines in the `order_lines` list. Do NOT combine them, and do NOT sum their widths or heights. If and only if the product name, width, and height are all identical across multiple lines, you MUST combine them into a single line and sum only their quantities.
 9. MULTIPLE LPO / ORDER NUMBERS RULE: If the uploaded document contains more than one Order Number or LPO (Local Purchase Order) Number (e.g., in a table, headers, or lines), this means the document includes multiple distinct orders. You MUST automatically generate a separate Sales Order preview page/object in the "orders" list for each unique Order/LPO Number, and write that Order/LPO Number in the "lpo_number" field of that order. Under no circumstances should you combine different LPOs or Order Numbers into a single order object.
 10. Inside the document's Header section (strictly within the first 3 rows), if any row or 3-4 words end with LLC/L.L.C. then that is the customer name.
@@ -102,18 +101,36 @@ CONFIDENCE SCORING:
 
 Always be warm and professional. Guide the user through providing all necessary information. Note: "order date" or "Quotation Date" refer to the same date, so always extract either as "quotation_date". Also, "Installation Date" or "Delivery Date" refer to the same date, so always extract either as "delivery_date". 'unit price', 'Rate', or 'price' mean the same thing, so always map them to the "price" field. 'Qty' or 'QTY' mean the same thing, so always map them to the "qty" field. 'H' with a number value represents height (map to "height" field) and 'W' with a number value represents width (map to "width" field)."""
 
-    def __init__(self, api_key, model='gemini-2.5-flash',
-                 vision_model='gemini-2.5-flash',
+    def __init__(self, api_key, model='llama-3.3-70b-versatile',
+                 vision_model='qwen/qwen3.6-27b',
                  max_tokens=4096, env=None):
         self.api_key = api_key
-        self.model = model or 'gemini-2.5-flash'
-        self.vision_model = vision_model or 'gemini-2.5-flash'
-        self.max_tokens = max_tokens or 4096
+        self.model = model
+        if not vision_model or vision_model not in {'qwen/qwen3.6-27b', 'meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.2-90b-vision-preview'}:
+            vision_model = 'qwen/qwen3.6-27b'
+        self.vision_model = vision_model
+        # Groq's maximum response token limit is typically 4096. Cap it to prevent API errors.
+        self.max_tokens = min(max_tokens or 4096, 4096)
         self.env = env
+        self._client = None
+
+    def _get_client(self):
+        """Lazy-initialize Groq client."""
+        if self._client is None:
+            try:
+                # pyrefly: ignore [missing-import]
+                from groq import Groq
+                self._client = Groq(api_key=self.api_key)
+            except ImportError:
+                raise ImportError(
+                    'The "groq" Python package is not installed. '
+                    'Please run: pip install groq'
+                )
+        return self._client
 
     def chat_completion(self, conversation_history, extra_context='', odoo_validation='', product_category=None):
         """
-        Send conversation history to Gemini and get a response.
+        Send conversation history to Groq and get a response.
 
         :param conversation_history: list of {'role': ..., 'content': ...}
         :param extra_context: additional text context (from parsed documents)
@@ -121,7 +138,9 @@ Always be warm and professional. Guide the user through providing all necessary 
         :param product_category: selected product category ('blind', 'fabric', or 'track')
         :return: str — AI response text
         """
-        system_instructions = [self.SYSTEM_PROMPT]
+        client = self._get_client()
+
+        messages = [{'role': 'system', 'content': self.SYSTEM_PROMPT}]
 
         if product_category:
             category_instructions = ""
@@ -151,13 +170,16 @@ Always be warm and professional. Guide the user through providing all necessary 
                     "- If the document contains multiple track lines of the same product but with different widths or heights, do NOT combine them; extract them as separate lines in the JSON.\n"
                 )
 
-            system_instructions.append(
-                f'The user has selected the product category: **{product_category.upper()}**.\n'
-                f'You MUST only extract and process products belonging to the **{product_category.upper()}** category.\n'
-                f'If the user mentions products or options from other categories, politely remind them '
-                f'that this session is specifically for generating a {product_category.title()} sales order.\n'
-                f'{category_instructions}'
-            )
+            messages.append({
+                'role': 'system',
+                'content': (
+                    f'The user has selected the product category: **{product_category.upper()}**.\n'
+                    f'You MUST only extract and process products belonging to the **{product_category.upper()}** category.\n'
+                    f'If the user mentions products or options from other categories, politely remind them '
+                    f'that this session is specifically for generating a {product_category.title()} sales order.\n'
+                    f'{category_instructions}'
+                )
+            })
 
         # Fetch category aliases if env is available to make AI aware of them
         aliases_context = ""
@@ -165,26 +187,18 @@ Always be warm and professional. Guide the user through providing all necessary 
             try:
                 category = self.env['alias.category'].sudo().search([('type', '=', product_category)], limit=1)
                 if category and category.line_ids:
-                    # Build search text from history and extra_context
-                    search_text = (extra_context or "").lower()
-                    for msg in conversation_history:
-                        if msg.get('content'):
-                            search_text += " " + msg['content'].lower()
-
                     product_aliases = []
                     customer_aliases = []
                     for line in category.line_ids:
                         if line.alias_name:
-                            alias_lower = line.alias_name.lower().strip()
-                            if alias_lower and alias_lower in search_text:
-                                # Product alias mapping
-                                if line.product_ids:
-                                    real_name = line.product_ids[0].name
-                                    product_aliases.append(f"- Alias '{line.alias_name}' maps to Product '{real_name}'")
-                                # Customer alias mapping
-                                if line.partner_ids:
-                                    real_customer = line.partner_ids[0].name
-                                    customer_aliases.append(f"- Alias '{line.alias_name}' maps to Customer '{real_customer}'")
+                            # Product alias mapping
+                            if line.product_ids:
+                                real_name = line.product_ids[0].name
+                                product_aliases.append(f"- Alias '{line.alias_name}' maps to Product '{real_name}'")
+                            # Customer alias mapping
+                            if line.partner_ids:
+                                real_customer = line.partner_ids[0].name
+                                customer_aliases.append(f"- Alias '{line.alias_name}' maps to Customer '{real_customer}'")
                     
                     if product_aliases or customer_aliases:
                         aliases_context = "\nB2B LOOKUP ALIASES DEFINED IN SYSTEM:\n"
@@ -194,116 +208,69 @@ Always be warm and professional. Guide the user through providing all necessary 
                             aliases_context += "Customer Aliases:\n" + "\n".join(customer_aliases) + "\n"
                         aliases_context += (
                             "\nCRITICAL ALIAS RESOLUTION RULES:\n"
-                            "1. If an Alias name listed above appears ALONE in a field or column (such as the customer name, product description/name, width, height, quantity, or price), you MUST replace it with its corresponding real name (the real product name or real customer name) in your JSON output block.\n"
-                            "2. If an Alias name appears accompanied by other words or characters (e.g. 'KK-Fabric with backing' or 'KK-Customer Ltd'), do NOT replace or change it. Take it exactly as-is in your JSON block.\n"
-                            "3. Do NOT change or resolve the alias name if it appears in any other general context in the document (like shipping instructions, general notes, etc.) that does not directly represent one of the fields listed above.\n"
+                            "1. If you find any of the Product Alias names listed above in the document's product context "
+                            "(e.g., in a product lines table, description of ordered item), you MUST replace it and output the "
+                            "corresponding real product name in your JSON block.\n"
+                            "2. Do NOT change the alias name if it appears in any other general context in the document "
+                            "(like shipping instructions, general notes, etc.). Only resolve it if it represents an ordered product.\n"
+                            "3. If you find any of the Customer Alias names listed above in the document's customer context "
+                            "(e.g., header, buyer name, billing info), you MUST replace it and output the corresponding real customer name "
+                            "in your JSON block.\n"
+                            "4. Do NOT change customer aliases if they appear in any other context.\n"
                         )
             except Exception as e:
                 _logger.warning("Error fetching category aliases for chatbot context: %s", str(e))
 
         if aliases_context:
-            system_instructions.append(aliases_context)
+            messages.append({
+                'role': 'system',
+                'content': aliases_context
+            })
+
 
         if extra_context:
-            system_instructions.append(f'DOCUMENT CONTENT EXTRACTED:\n\n{extra_context}\n\nUse this information to help extract order details.')
+            messages.append({
+                'role': 'system',
+                'content': f'DOCUMENT CONTENT EXTRACTED:\n\n{extra_context}\n\nUse this information to help extract order details.'
+            })
 
         if odoo_validation:
-            system_instructions.append(
-                f'LIVE ODOO SYSTEM VALIDATION STATUS:\n\n{odoo_validation}\n\n'
-                'CRITICAL USER FEEDBACK INSTRUCTION:\n'
-                'In your conversational response, keep it extremely brief. If there are validation errors or warnings '
-                'preventing the Sales Order from being created, ONLY list these issues so the user knows what needs correction. '
-                'Do NOT describe or repeat successfully resolved or extracted values.'
-            )
-
-        full_system_prompt = "\n\n=== ADDITIONAL CONTEXT/RULES ===\n\n".join(system_instructions)
-
-        # Build contents array from conversation history with role serialization & consolidation
-        contents = []
-        for msg in conversation_history:
-            role = 'user' if msg.get('role') == 'user' else 'model'
-            text = msg.get('content', '') or ''
-            if not text.strip():
-                continue
-            
-            # Combine consecutive messages with the same role
-            if contents and contents[-1]['role'] == role:
-                contents[-1]['parts'][0]['text'] += f"\n\n{text}"
-            else:
-                contents.append({
-                    'role': role,
-                    'parts': [{'text': text}]
-                })
-        
-        # Google Gemini API requires contents to start with a 'user' message
-        if contents and contents[0]['role'] == 'model':
-            contents.insert(0, {
-                'role': 'user',
-                'parts': [{'text': 'Hello'}]
-            })
-            
-        # Ensure contents is never empty to prevent 400 Bad Request
-        if not contents:
-            contents.append({
-                'role': 'user',
-                'parts': [{'text': 'Extract order details from the provided document.'}]
+            messages.append({
+                'role': 'system',
+                'content': (
+                    f'LIVE ODOO SYSTEM VALIDATION STATUS:\n\n{odoo_validation}\n\n'
+                    'CRITICAL USER FEEDBACK INSTRUCTION:\n'
+                    'In your conversational response, keep it extremely brief. If there are validation errors or warnings '
+                    'preventing the Sales Order from being created, ONLY list these issues so the user knows what needs correction. '
+                    'Do NOT describe or repeat successfully resolved or extracted values.'
+                )
             })
 
-        payload = {
-            "contents": contents,
-            "systemInstruction": {
-                "parts": [{"text": full_system_prompt}]
-            },
-            "generationConfig": {
-                "temperature": 0.3,
-                "maxOutputTokens": self.max_tokens or 8192,
-            }
-        }
-
-        model_name = self.model
-        if not model_name.startswith("models/"):
-            model_name = f"models/{model_name}"
-
-        # Gemini 2.5 models use reasoning/thinking tokens by default which consume
-        # the maxOutputTokens budget. Disable reasoning to save output token limits and speed up response times.
-        if '2.5' in model_name:
-            payload["generationConfig"]["thinkingConfig"] = {
-                "thinkingBudget": 0
-            }
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={self.api_key}"
-        headers = {"Content-Type": "application/json"}
+        messages.extend(conversation_history)
 
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-            res_data = response.json()
-            candidates = res_data.get('candidates', [])
-            if candidates:
-                parts = candidates[0].get('content', {}).get('parts', [])
-                if parts:
-                    raw_text = parts[0].get('text', '')
-                    
-                    # Sanitize raw_text: If Gemini outputs raw ``` blocks without the 'json' label,
-                    # convert them to ```json to ensure the parser in order_extractor.py matches correctly.
-                    if raw_text:
-                        raw_text = re.sub(r'```(?:[\s\n]*\{)', '```json\n{', raw_text)
-                    return raw_text
-                    
-            raise ValueError(f"Unexpected API response structure: {res_data}")
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=0.3,
+            )
+            return response.choices[0].message.content
         except Exception as e:
-            _logger.error('Gemini chat completion error: %s', str(e))
+            _logger.error('Groq chat completion error: %s', str(e))
             raise
 
     def vision_ocr(self, image_bytes, mime_type='image/jpeg', prompt=None):
         """
-        Use Gemini Vision to extract text/data from an image or page.
+        Use Groq Vision to extract text/data from an image or page.
 
         :param image_bytes: raw image bytes
         :param mime_type: e.g. 'image/jpeg', 'image/png'
         :param prompt: optional instruction override
         :return: str — extracted text
         """
+        client = self._get_client()
+
         if prompt is None:
             prompt = (
                 'This is a document image (purchase order, quotation, RFQ, invoice, or similar). '
@@ -314,72 +281,55 @@ Always be warm and professional. Guide the user through providing all necessary 
             )
 
         b64_image = base64.b64encode(image_bytes).decode('utf-8')
-
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "inlineData": {
-                                "mimeType": mime_type,
-                                "data": b64_image
-                            }
-                        },
-                        {
-                            "text": prompt
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 2048,
-            }
-        }
-
-        model_name = self.vision_model
-        if not model_name.startswith("models/"):
-            model_name = f"models/{model_name}"
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={self.api_key}"
-        headers = {"Content-Type": "application/json"}
+        image_url = f'data:{mime_type};base64,{b64_image}'
 
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-            res_data = response.json()
-            candidates = res_data.get('candidates', [])
-            if candidates:
-                parts = candidates[0].get('content', {}).get('parts', [])
-                if parts:
-                    return parts[0].get('text', '')
-            raise ValueError(f"Unexpected API response structure: {res_data}")
+            response = client.chat.completions.create(
+                model=self.vision_model,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': [
+                            {
+                                'type': 'text',
+                                'text': prompt,
+                            },
+                            {
+                                'type': 'image_url',
+                                'image_url': {'url': image_url},
+                            },
+                        ],
+                    }
+                ],
+                max_tokens=2048,
+                temperature=0.1,
+            )
+            return response.choices[0].message.content
         except Exception as e:
-            _logger.error('Gemini vision OCR error: %s', str(e))
+            _logger.error('Groq vision OCR error: %s', str(e))
             raise
 
     @classmethod
     def from_env(cls, env):
-        """Create GeminiService from Odoo environment config params."""
+        """Create GroqService from Odoo environment config params."""
         ICP = env['ir.config_parameter'].sudo()
-        api_key = ICP.get_param('sale_order_ai_chatbot.gemini_api_key', '')
-        model = ICP.get_param('sale_order_ai_chatbot.gemini_model', 'gemini-2.5-flash')
+        api_key = ICP.get_param('sale_order_ai_chatbot.groq_api_key', '')
+        model = ICP.get_param('sale_order_ai_chatbot.groq_model', 'llama-3.3-70b-versatile')
         vision_model = ICP.get_param(
-            'sale_order_ai_chatbot.gemini_vision_model',
-            'gemini-2.5-flash'
+            'sale_order_ai_chatbot.groq_vision_model',
+            'qwen/qwen3.6-27b'
         )
-        max_tokens_val = ICP.get_param('sale_order_ai_chatbot.gemini_max_tokens', '8192')
-        try:
-            max_tokens = int(max_tokens_val) if max_tokens_val else 8192
-        except (ValueError, TypeError):
-            max_tokens = 8192
-
-        if max_tokens <= 0:
-            max_tokens = 8192
+        if not vision_model or vision_model not in {'qwen/qwen3.6-27b', 'meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.2-90b-vision-preview'}:
+            vision_model = 'qwen/qwen3.6-27b'
+            try:
+                ICP.set_param('sale_order_ai_chatbot.groq_vision_model', 'qwen/qwen3.6-27b')
+            except Exception:
+                pass
+        max_tokens = int(ICP.get_param('sale_order_ai_chatbot.groq_max_tokens', 4096))
 
         if not api_key:
             raise ValueError(
-                'Gemini API key is not configured. '
-                'Please go to Settings → AI Sales Bot and enter your Gemini API key.'
+                'Groq API key is not configured. '
+                'Please go to Settings → AI Sales Bot and enter your Groq API key.'
             )
         return cls(api_key=api_key, model=model, vision_model=vision_model, max_tokens=max_tokens, env=env)

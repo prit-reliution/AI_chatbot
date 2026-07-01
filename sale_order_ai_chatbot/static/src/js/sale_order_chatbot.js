@@ -57,6 +57,26 @@ class SaleOrderChatbot extends Component {
                 <!-- Sidebar: Session history -->
                 <div t-att-class="'o_session_sidebar' + (state.sidebarOpen ? '' : ' collapsed')">
                     <div class="o_session_sidebar_header">💬 Chat History</div>
+                    
+                    <t t-if="state.sessionHistory.length > 0">
+                        <div class="o_session_control_row" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--bot-border);background:rgba(0,0,0,0.02)">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;user-select:none;margin:0;color:var(--bot-text)">
+                                <input type="checkbox"
+                                       t-att-checked="isAllSessionsSelected()"
+                                       t-on-change="toggleSelectAllSessions"
+                                       style="cursor:pointer"/>
+                                Select All
+                            </label>
+                            <t t-if="state.selectedSessionIds.length > 0">
+                                <button class="o_bot_btn"
+                                        t-on-click="deleteSelectedSessions"
+                                        style="padding:2px 8px;font-size:11px;background-color:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer">
+                                    Delete (<t t-esc="state.selectedSessionIds.length"/>)
+                                </button>
+                            </t>
+                        </div>
+                    </t>
+
                     <div class="o_session_list">
                         <t t-if="state.sessionHistory.length === 0">
                             <div style="padding:20px;text-align:center;color:var(--bot-text-muted);font-size:13px">
@@ -66,7 +86,11 @@ class SaleOrderChatbot extends Component {
                         <t t-foreach="state.sessionHistory" t-as="sess" t-key="sess.id">
                             <div t-att-class="getSessionItemClass(sess)"
                                  t-on-click="() => loadSession(sess.id)"
-                                 style="display:flex;justify-content:space-between;align-items:center">
+                                 style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                                <input type="checkbox"
+                                       t-att-checked="isSessionSelected(sess.id)"
+                                       t-on-click.stop="() => toggleSessionSelection(sess.id)"
+                                       style="cursor:pointer"/>
                                 <div style="min-width:0;flex:1">
                                     <div class="o_session_item_name" t-esc="sess.name"/>
                                     <div class="o_session_item_meta">
@@ -148,6 +172,7 @@ class SaleOrderChatbot extends Component {
             saleOrderName: null,
             sessionHistory: [],
             sidebarOpen: false,
+            selectedSessionIds: [],
         });
 
         // Bind loadSession to preserve 'this' context in template arrow functions
@@ -155,6 +180,11 @@ class SaleOrderChatbot extends Component {
         this.onCancelRequest = this.onCancelRequest.bind(this);
         this.onSelectCategory = this.onSelectCategory.bind(this);
         this.deleteSession = this.deleteSession.bind(this);
+        this.toggleSessionSelection = this.toggleSessionSelection.bind(this);
+        this.isSessionSelected = this.isSessionSelected.bind(this);
+        this.isAllSessionsSelected = this.isAllSessionsSelected.bind(this);
+        this.toggleSelectAllSessions = this.toggleSelectAllSessions.bind(this);
+        this.deleteSelectedSessions = this.deleteSelectedSessions.bind(this);
         this._abortController = null;
 
         onMounted(async () => {
@@ -227,8 +257,12 @@ class SaleOrderChatbot extends Component {
             const result = await this._rpc('/sale_order_ai_chatbot/sessions', {});
             if (result.success) {
                 this.state.sessionHistory = result.sessions || [];
+                const histIds = this.state.sessionHistory.map(s => s.id);
+                this.state.selectedSessionIds = (this.state.selectedSessionIds || []).filter(id => histIds.includes(id));
             }
-        } catch { }
+        } catch {
+            this.notification.add('Failed to load chat history', { type: 'danger' });
+        }
     }
 
     async resetSession() {
@@ -265,6 +299,64 @@ class SaleOrderChatbot extends Component {
             }
         } catch {
             this.notification.add('Error deleting session', { type: 'danger' });
+        }
+    }
+
+    toggleSessionSelection(sessionId) {
+        const idx = this.state.selectedSessionIds.indexOf(sessionId);
+        if (idx > -1) {
+            this.state.selectedSessionIds.splice(idx, 1);
+        } else {
+            this.state.selectedSessionIds.push(sessionId);
+        }
+    }
+
+    isSessionSelected(sessionId) {
+        return this.state.selectedSessionIds.includes(sessionId);
+    }
+
+    isAllSessionsSelected() {
+        if (this.state.sessionHistory.length === 0) {
+            return false;
+        }
+        return this.state.sessionHistory.every(sess => this.state.selectedSessionIds.includes(sess.id));
+    }
+
+    toggleSelectAllSessions() {
+        if (this.isAllSessionsSelected()) {
+            this.state.selectedSessionIds = [];
+        } else {
+            this.state.selectedSessionIds = this.state.sessionHistory.map(sess => sess.id);
+        }
+    }
+
+    async deleteSelectedSessions() {
+        const ids = this.state.selectedSessionIds;
+        if (ids.length === 0) return;
+        if (!confirm(`Are you sure you want to delete these ${ids.length} selected chat sessions?`)) {
+            return;
+        }
+        try {
+            const result = await this._rpc('/sale_order_ai_chatbot/sessions/delete_bulk', {
+                session_ids: ids
+            });
+            if (result.success) {
+                this.notification.add('Selected chat sessions deleted', { type: 'success' });
+                this.state.selectedSessionIds = [];
+                const wasCurrentDeleted = this.state.currentSession && ids.includes(this.state.currentSession.id);
+                await this.loadSessionHistory();
+                if (wasCurrentDeleted) {
+                    if (this.state.sessionHistory.length > 0) {
+                        await this.loadSession(this.state.sessionHistory[0].id);
+                    } else {
+                        await this.newChat();
+                    }
+                }
+            } else {
+                this.notification.add(result.error || 'Failed to delete selected sessions', { type: 'danger' });
+            }
+        } catch {
+            this.notification.add('Error deleting selected sessions', { type: 'danger' });
         }
     }
 

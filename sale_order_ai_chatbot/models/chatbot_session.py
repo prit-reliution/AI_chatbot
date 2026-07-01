@@ -271,7 +271,17 @@ class SaleChatbotSession(models.Model):
         if date_order:
             order_vals['date_order'] = date_order
 
-        sale_order = self.env['sale.order'].create(order_vals)
+        # Temporarily bypass partner phone validation in sale_order_customization during creation
+        temp_phone_bypass = False
+        if not partner.phone and not partner.mobile:
+            partner.sudo().with_context(no_sync=True).write({'phone': '0000000000'})
+            temp_phone_bypass = True
+            
+        try:
+            sale_order = self.env['sale.order'].create(order_vals)
+        finally:
+            if temp_phone_bypass:
+                partner.sudo().with_context(no_sync=True).write({'phone': False})
         
         # --- Update session state and json ---
         if is_multiple:
@@ -396,8 +406,9 @@ class SaleChatbotSession(models.Model):
                 return partner
 
         # If not found, create a new partner with the name exactly as the user typed it in the preview
-        return self.env['res.partner'].create({
+        return self.env['res.partner'].with_context(no_sync=True).create({
             'name': customer_name,
+            'phone': '0000000000',
         })
 
     def _get_category_ids_for_type(self, product_category):
@@ -539,7 +550,10 @@ class SaleChatbotSession(models.Model):
         self.confidence_score = 0.0
         self.sale_order_id = False
         self.product_category = False
-        self.name = _('New Chat Session')
+        from datetime import datetime
+        now_local = fields.Datetime.context_timestamp(self, datetime.now())
+        date_str = now_local.strftime('%d/%m/%y %H:%M')
+        self.name = _('Chat Session %s') % date_str
 
     def check_and_reset_done_session(self):
         """If the session was completed (done), reset its order fields so the user can continue chatting."""
@@ -579,9 +593,11 @@ class SaleChatbotSession(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        from datetime import datetime
+        now_local = fields.Datetime.context_timestamp(self, datetime.now())
+        date_str = now_local.strftime('%d/%m/%y %H:%M')
         for vals in vals_list:
             if not vals.get('name') or vals.get('name') == _('New Chat Session'):
-                seq = self.env['ir.sequence'].next_by_code('sale.chatbot.session') or '/'
-                vals['name'] = _('Chat Session %s') % seq
+                vals['name'] = _('Chat Session %s') % date_str
         return super().create(vals_list)
 
