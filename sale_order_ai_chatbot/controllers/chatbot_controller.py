@@ -180,16 +180,20 @@ class SaleOrderAIChatbotController(http.Controller):
                     'validation_warnings': [],
                 }
 
+            # Replace standalone aliases in prompt message
+            validator = OrderValidator(request.env)
+            processed_message = validator.replace_standalone_aliases(message, product_category=session.product_category)
+
             # Save user message
             user_msg = request.env['sale.chatbot.message'].create({
                 'session_id': session.id,
                 'role': 'user',
-                'content': message,
+                'content': processed_message,
                 'message_type': 'text',
             })
 
             # Build AI response
-            ai_reply, updated_order_data = self._process_message(session, message)
+            ai_reply, updated_order_data = self._process_message(session, processed_message)
 
             # Save AI response
             request.env['sale.chatbot.message'].create({
@@ -325,6 +329,12 @@ class SaleOrderAIChatbotController(http.Controller):
 
             # Retrieve optional user message/comment
             message = kwargs.get('message') or ''
+
+            # Replace standalone aliases in prompt message and extracted text
+            validator = OrderValidator(request.env)
+            extracted_text = validator.replace_standalone_aliases(extracted_text, product_category=session.product_category)
+            if message:
+                message = validator.replace_standalone_aliases(message, product_category=session.product_category)
 
             # Save user message indicating upload
             user_content = f'📎 Uploaded file: **{filename}**'

@@ -47,6 +47,7 @@ CRITICAL RULES:
     - If you find only 'H' (or 'h') with a number value, this represents Height. You MUST write/map this value to the 'height' field in the JSON block.
     - If you find only 'W' (or 'w') with a number value, this represents Width. You MUST write/map this value to the 'width' field in the JSON block.
     - If you find 'Installation Date' anywhere in the document or user prompt, this represents the delivery date. You MUST map this value to the 'delivery_date' field in the JSON block.
+    - PRODUCT NAME EXTRACTION RULE: You MUST extract the product name ONLY from the single column named 'Product' or 'Fabric'. Do NOT append, prefix, suffix, or combine any other column values (such as 'Bracket', 'Bunch', 'Inside/Outside', 'Accs. 1', 'Color', 'Design', etc.) into the product name. For example, if the 'Product' column is 'Track', the extracted product name in the JSON MUST be exactly 'Track', and NOT 'Track Ceiling Single Split Outside Wave Rail' or any other combined string. Keep it strictly as the exact value from that single column.
 
 REQUIRED JSON SCHEMA (always include at end of response inside ```json``` block):
 ```json
@@ -187,10 +188,18 @@ Always be warm and professional. Guide the user through providing all necessary 
             try:
                 category = self.env['alias.category'].sudo().search([('type', '=', product_category)], limit=1)
                 if category and category.line_ids:
+                    # Build search text from history and extra_context
+                    search_text = (extra_context or "")
+                    for msg in conversation_history:
+                        if msg.get('content'):
+                            search_text += " " + msg['content']
+
                     product_aliases = []
                     customer_aliases = []
+                    from .order_validator import OrderValidator
+                    validator = OrderValidator(self.env)
                     for line in category.line_ids:
-                        if line.alias_name:
+                        if line.alias_name and validator.is_alias_standalone_in_text(search_text, line.alias_name):
                             # Product alias mapping
                             if line.product_ids:
                                 real_name = line.product_ids[0].name

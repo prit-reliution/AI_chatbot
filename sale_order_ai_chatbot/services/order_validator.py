@@ -836,7 +836,7 @@ class OrderValidator:
             category = self.env['alias.category'].sudo().search([('type', '=', product_category)], limit=1)
             if category:
                 for line in category.line_ids:
-                    if line.alias_name and line.alias_name.strip().lower() in text.lower():
+                    if line.alias_name and self.is_alias_standalone_in_text(text, line.alias_name):
                         if line.partner_ids:
                             return line.partner_ids[0]
             
@@ -1283,3 +1283,127 @@ class OrderValidator:
             ('active', '=', True)
         ], limit=limit)
         return [{'id': u.id, 'name': u.name} for u in users]
+
+    def is_alias_standalone_in_text(self, text, alias_name):
+        """
+        Check if alias_name appears in text as a standalone word or phrase
+        (i.e., not surrounded by or combined with other words in a sentence).
+        """
+        if not text or not alias_name:
+            return False
+            
+        import re
+        alias_clean = alias_name.strip().lower()
+        if not alias_clean:
+            return False
+            
+        def clean_val(val):
+            return re.sub(r'[\W_]+', '', val).lower() if val else ''
+            
+        alias_clean_val = clean_val(alias_clean)
+        
+        lines = text.split('\n')
+        for line in lines:
+            parts = re.split(r'(\s*\|\s*|\t+|\s{2,})', line)
+            for part in parts:
+                if re.match(r'^(\s*\|\s*|\t+|\s{2,})$', part):
+                    continue
+                # Strip leading/trailing punctuation/whitespace
+                leading_match = re.match(r'^([\s.,;:!?()\[\]{}\'"“”‘’]*)', part)
+                leading = leading_match.group(1) if leading_match else ''
+                
+                trailing_match = re.search(r'([\s.,;:!?()\[\]{}\'"“”‘’]*)$', part)
+                trailing = trailing_match.group(1) if trailing_match else ''
+                
+                if len(trailing) > 0:
+                    middle = part[len(leading):-len(trailing)]
+                else:
+                    middle = part[len(leading):]
+                    
+                middle_stripped = middle.strip()
+                if not middle_stripped:
+                    continue
+                    
+                if middle_stripped.lower() == alias_clean:
+                    return True
+                if alias_clean_val and clean_val(middle_stripped) == alias_clean_val:
+                    return True
+        return False
+
+    def replace_standalone_aliases(self, text, product_category=None):
+        """
+        Scans the input text for aliases associated with the product_category.
+        Replaces them ONLY if they appear as standalone words or phrases.
+        """
+        if not text or not isinstance(text, str) or not product_category:
+            return text
+            
+        category = self.env['alias.category'].sudo().search([('type', '=', product_category)], limit=1)
+        if not category or not category.line_ids:
+            return text
+            
+        alias_lines = category.line_ids
+        
+        import re
+        
+        def clean_val(val):
+            return re.sub(r'[\W_]+', '', val).lower() if val else ''
+            
+        def get_replacement(middle_text):
+            stripped = middle_text.strip()
+            if not stripped:
+                return None
+            # Exact case-insensitive match
+            for line in alias_lines:
+                alias_name = (line.alias_name or '').strip()
+                if not alias_name:
+                    continue
+                if stripped.lower() == alias_name.lower():
+                    if line.product_ids:
+                        return line.product_ids[0].name
+                    elif line.partner_ids:
+                        return line.partner_ids[0].name
+                        
+            # Cleaned comparison
+            clean_stripped = clean_val(stripped)
+            if clean_stripped:
+                for line in alias_lines:
+                    alias_name = (line.alias_name or '').strip()
+                    if not alias_name:
+                        continue
+                    if clean_val(alias_name) == clean_stripped:
+                        if line.product_ids:
+                            return line.product_ids[0].name
+                        elif line.partner_ids:
+                            return line.partner_ids[0].name
+            return None
+
+        lines = text.split('\n')
+        new_lines = []
+        for line in lines:
+            parts = re.split(r'(\s*\|\s*|\t+|\s{2,})', line)
+            new_parts = []
+            for part in parts:
+                if re.match(r'^(\s*\|\s*|\t+|\s{2,})$', part):
+                    new_parts.append(part)
+                    continue
+                    
+                leading_match = re.match(r'^([\s.,;:!?()\[\]{}\'"“”‘’]*)', part)
+                leading = leading_match.group(1) if leading_match else ''
+                
+                trailing_match = re.search(r'([\s.,;:!?()\[\]{}\'"“”‘’]*)$', part)
+                trailing = trailing_match.group(1) if trailing_match else ''
+                
+                if len(trailing) > 0:
+                    middle = part[len(leading):-len(trailing)]
+                else:
+                    middle = part[len(leading):]
+                    
+                resolved = get_replacement(middle)
+                if resolved:
+                    new_parts.append(leading + resolved + trailing)
+                else:
+                    new_parts.append(part)
+            new_lines.append(''.join(new_parts))
+            
+        return '\n'.join(new_lines)
